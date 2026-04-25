@@ -18,6 +18,29 @@ const API_BASE_URL = "http://127.0.0.1:3001";
 const COGNITO_REGION = "us-east-2";
 const COGNITO_CLIENT_ID = "3npppr0t7p9ulpttpq2p3s0g6c";
 const COGNITO_ENDPOINT = `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/`;
+const STARTER_MESSAGES = [
+  {
+    id: "starter-sentenal-host",
+    text: "Welcome in. This is the public room, so say what's on your radar.",
+    userAlias: "Sentenal Host",
+    userEmail: "sentenal@sentenal.news",
+    createdAt: "2026-04-22T12:00:00.000Z"
+  },
+  {
+    id: "starter-night-watch",
+    text: "Anyone else tracking how fast the app is changing? Feels like a tiny newsroom in here.",
+    userAlias: "Night Watch",
+    userEmail: "night-watch@sentenal.news",
+    createdAt: "2026-04-22T12:01:00.000Z"
+  },
+  {
+    id: "starter-question",
+    text: "First question: what should Sentenal cover or build next?",
+    userAlias: "Forum Prompt",
+    userEmail: "forum@sentenal.news",
+    createdAt: "2026-04-22T12:02:00.000Z"
+  }
+];
 
 export default function App() {
   const [email, setEmail] = useState("");
@@ -30,6 +53,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [newsletterSynced, setNewsletterSynced] = useState(false);
   const [newsletterSyncing, setNewsletterSyncing] = useState(false);
+  const displayMessages = messages.length ? messages : STARTER_MESSAGES;
 
   useEffect(() => {
     if (!savedEmail) {
@@ -331,7 +355,7 @@ export default function App() {
         </View>
 
         <FlatList
-          data={messages}
+          data={displayMessages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messageList}
           renderItem={({ item }) => (
@@ -343,13 +367,6 @@ export default function App() {
               </Text>
             </View>
           )}
-          ListEmptyComponent={
-            <View style={styles.messageCard}>
-              <Text style={styles.messageBody}>
-                No posts yet. Start the forum.
-              </Text>
-            </View>
-          }
         />
 
         <View style={styles.composer}>
