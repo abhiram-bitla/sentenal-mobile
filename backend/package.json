@@ -1,0 +1,16 @@
+{
+  "name": "sentenal-forum-backend",
+  "version": "1.0.0",
+  "description": "Sentenal public forum API with DynamoDB-backed messages",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1037.0",
+    "@aws-sdk/lib-dynamodb": "^3.1037.0",
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1"
+  }
+}
