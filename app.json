@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Sentenal",
+    "name": "Sentenal Mobile",
     "slug": "sentenal",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.abhirambitla.sentenalapp",
+      "bundleIdentifier": "com.abhirambitla.sentenalmobile",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
