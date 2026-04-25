@@ -31,6 +31,8 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
+backend/.env
 .env*.local
 backend/data/*.json
 

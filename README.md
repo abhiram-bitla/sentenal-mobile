@@ -33,3 +33,9 @@ FORUM_MESSAGES_TABLE=your-dynamodb-table-name
 The DynamoDB table needs a string partition key named `id`. If `FORUM_MESSAGES_TABLE` is not set, the backend uses `backend/data/db.json` for local development.
 
 Default Sentenal forum posts are automatically inserted into the active message store on the first `/api/messages` request.
+
+From `backend/`, you can create the default table and write `backend/.env` after AWS CLI login:
+
+```bash
+npm run setup:dynamodb
+```
