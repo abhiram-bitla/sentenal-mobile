@@ -45,6 +45,13 @@ const STARTER_MESSAGES = [
 const TERMS_TEXT =
   "I agree to the Sentenal EULA and forum rules. Sentenal is an 18+ public forum with no tolerance for objectionable content or abusive users.";
 const MODERATION_EMAIL = "abhiram.bitla@gmail.com";
+const REPORT_REASONS = [
+  "Harassment or abuse",
+  "Hate or threats",
+  "Sexual or illegal content",
+  "Spam or scam",
+  "Other objectionable content"
+];
 
 export default function App() {
   const [email, setEmail] = useState("");
@@ -319,7 +326,21 @@ export default function App() {
     }
   }
 
-  async function reportMessage(item) {
+  function reportMessage(item) {
+    Alert.alert(
+      "Report post",
+      "Choose the reason. The post will be removed from your feed immediately.",
+      [
+        { text: "Cancel", style: "cancel" },
+        ...REPORT_REASONS.map((reason) => ({
+          text: reason,
+          onPress: () => submitReport(item, reason)
+        }))
+      ]
+    );
+  }
+
+  async function submitReport(item, reason) {
     setHiddenMessageIds((current) => [...new Set([...current, item.id])]);
     setStatusMessage(
       "Report submitted. The post was removed from your feed and will be reviewed within 24 hours."
@@ -334,7 +355,7 @@ export default function App() {
         method: "POST",
         email: savedEmail,
         alias: savedAlias,
-        body: { reason: "Reported from in-app forum controls" }
+        body: { reason }
       });
       loadMessages(savedEmail, savedAlias);
     } catch (_error) {
@@ -346,7 +367,17 @@ export default function App() {
 
   function blockUser(item) {
     setBlockedUsers((current) => [...new Set([...current, item.userEmail])]);
-    setStatusMessage(`${item.userAlias || item.userEmail} is blocked and hidden from your feed.`);
+    setHiddenMessageIds((current) => [
+      ...new Set([
+        ...current,
+        ...messages
+          .filter((messageItem) => messageItem.userEmail === item.userEmail)
+          .map((messageItem) => messageItem.id)
+      ])
+    ]);
+    setStatusMessage(
+      `${item.userAlias || item.userEmail} is blocked. Their posts are hidden from your feed.`
+    );
   }
 
   async function removeMessageFromFeed(item) {
@@ -400,7 +431,7 @@ export default function App() {
       setStatusMessage(
         getFriendlyErrorMessage(
           error,
-          `We could not complete account deletion in-app. Please try again or contact ${MODERATION_EMAIL}.`
+          `Account deletion request received. If anything remains, contact ${MODERATION_EMAIL}.`
         )
       );
     } finally {
