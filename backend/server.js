@@ -7,10 +7,16 @@ const path = require("path");
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
+  DeleteCommand,
   DynamoDBDocumentClient,
   PutCommand,
   ScanCommand
 } = require("@aws-sdk/lib-dynamodb");
+const {
+  AdminDeleteUserCommand,
+  CognitoIdentityProviderClient,
+  ListUsersCommand
+} = require("@aws-sdk/client-cognito-identity-provider");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,6 +28,17 @@ const COGNITO_APP_CLIENT_ID = "3npppr0t7p9ulpttpq2p3s0g6c";
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-2";
 const MESSAGES_TABLE =
   process.env.FORUM_MESSAGES_TABLE || process.env.DYNAMODB_MESSAGES_TABLE || "";
+const MODERATION_CONTACT_EMAIL =
+  process.env.MODERATION_CONTACT_EMAIL || "abhiram.bitla@gmail.com";
+const BLOCKED_TERMS = [
+  "kill yourself",
+  "kys",
+  "nazi",
+  "terrorist",
+  "rape",
+  "slur",
+  "hate speech"
+];
 
 const DEFAULT_MESSAGES = [
   {
@@ -51,6 +68,7 @@ const DEFAULT_MESSAGES = [
 ];
 
 let dynamoDocClient;
+let cognitoClient;
 
 function ensureDb() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -89,6 +107,19 @@ function getDynamoDocClient() {
   return dynamoDocClient;
 }
 
+function getCognitoClient() {
+  if (!cognitoClient) {
+    cognitoClient = new CognitoIdentityProviderClient({ region: COGNITO_REGION });
+  }
+
+  return cognitoClient;
+}
+
+function containsBlockedTerm(value) {
+  const normalized = String(value || "").toLowerCase();
+  return BLOCKED_TERMS.some((term) => normalized.includes(term));
+}
+
 function normalizeMessage(message) {
   return {
     id: message.id,
@@ -96,12 +127,17 @@ function normalizeMessage(message) {
     userEmail: message.userEmail,
     userAlias: message.userAlias || message.userEmail,
     createdAt: message.createdAt,
+    reportedAt: message.reportedAt || null,
+    removedAt: message.removedAt || null,
     seeded: Boolean(message.seeded)
   };
 }
 
 function sortMessages(messages) {
   return messages
+    .filter((message) => message.type !== "report")
+    .filter((message) => !message.removedAt)
+    .filter((message) => !message.reportedAt)
     .map(normalizeMessage)
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
     .slice(-100);
@@ -176,6 +212,28 @@ async function listForumMessages() {
   };
 }
 
+async function findForumMessage(messageId) {
+  const client = getDynamoDocClient();
+
+  if (client) {
+    const result = await client.send(
+      new ScanCommand({
+        TableName: MESSAGES_TABLE,
+        FilterExpression: "id = :id",
+        ExpressionAttributeValues: {
+          ":id": messageId
+        },
+        Limit: 1
+      })
+    );
+
+    return (result.Items || [])[0] || null;
+  }
+
+  const db = readDb();
+  return db.messages.find((message) => message.id === messageId) || null;
+}
+
 async function saveForumMessage(message, db) {
   const client = getDynamoDocClient();
 
@@ -192,6 +250,134 @@ async function saveForumMessage(message, db) {
   db.messages.push(message);
   writeDb(db);
   return "local-json";
+}
+
+async function removeForumMessage(messageId, db) {
+  const client = getDynamoDocClient();
+
+  if (client) {
+    await client.send(
+      new DeleteCommand({
+        TableName: MESSAGES_TABLE,
+        Key: { id: messageId }
+      })
+    );
+    return "dynamodb";
+  }
+
+  db.messages = db.messages.filter((message) => message.id !== messageId);
+  writeDb(db);
+  return "local-json";
+}
+
+async function reportForumMessage(messageId, reporter, reason, db) {
+  const message = await findForumMessage(messageId);
+  if (!message) {
+    return null;
+  }
+
+  const report = {
+    id: `report-${crypto.randomUUID()}`,
+    type: "report",
+    messageId,
+    messageText: message.text,
+    offenderEmail: message.userEmail,
+    offenderAlias: message.userAlias || message.userEmail,
+    reporterEmail: reporter.email,
+    reporterAlias: reporter.alias || reporter.email,
+    reason,
+    status: "pending-review",
+    createdAt: new Date().toISOString()
+  };
+
+  const client = getDynamoDocClient();
+  if (client) {
+    await client.send(
+      new PutCommand({
+        TableName: MESSAGES_TABLE,
+        Item: report
+      })
+    );
+    await removeForumMessage(messageId, db);
+    return { report, store: "dynamodb" };
+  }
+
+  db.reports = db.reports || [];
+  db.reports.push(report);
+  db.messages = db.messages.filter((entry) => entry.id !== messageId);
+  writeDb(db);
+  return { report, store: "local-json" };
+}
+
+async function deleteCognitoUsersForEmail(email) {
+  const client = getCognitoClient();
+  const result = await client.send(
+    new ListUsersCommand({
+      UserPoolId: COGNITO_USER_POOL_ID,
+      Filter: `email = "${email}"`
+    })
+  );
+
+  await Promise.all(
+    (result.Users || []).map((user) =>
+      client.send(
+        new AdminDeleteUserCommand({
+          UserPoolId: COGNITO_USER_POOL_ID,
+          Username: user.Username
+        })
+      )
+    )
+  );
+
+  return (result.Users || []).length;
+}
+
+async function deleteAccountData(user, db) {
+  const client = getDynamoDocClient();
+  let removedMessages = 0;
+
+  if (client) {
+    const result = await client.send(
+      new ScanCommand({
+        TableName: MESSAGES_TABLE,
+        FilterExpression: "userEmail = :email OR reporterEmail = :email OR offenderEmail = :email",
+        ExpressionAttributeValues: {
+          ":email": user.email
+        }
+      })
+    );
+
+    await Promise.all(
+      (result.Items || []).map((item) =>
+        client.send(
+          new DeleteCommand({
+            TableName: MESSAGES_TABLE,
+            Key: { id: item.id }
+          })
+        )
+      )
+    );
+    removedMessages = (result.Items || []).length;
+  } else {
+    const beforeMessages = db.messages.length;
+    db.messages = db.messages.filter((message) => message.userEmail !== user.email);
+    db.reports = (db.reports || []).filter(
+      (report) =>
+        report.reporterEmail !== user.email && report.offenderEmail !== user.email
+    );
+    db.users = db.users.filter((entry) => entry.email !== user.email);
+    removedMessages = beforeMessages - db.messages.length;
+    writeDb(db);
+  }
+
+  let removedCognitoUsers = 0;
+  try {
+    removedCognitoUsers = await deleteCognitoUsersForEmail(user.email);
+  } catch (error) {
+    console.warn("Could not delete Cognito user records:", error.message);
+  }
+
+  return { removedMessages, removedCognitoUsers };
 }
 
 function publicUser(user) {
@@ -411,6 +597,14 @@ app.post("/api/auth/logout", (req, res) => {
   });
 });
 
+app.get("/api/moderation", (_req, res) => {
+  res.json({
+    contactEmail: MODERATION_CONTACT_EMAIL,
+    terms:
+      "Sentenal has zero tolerance for objectionable content or abusive users. Posts containing harassment, threats, hate, sexual exploitation, or illegal content are prohibited. Reports are reviewed within 24 hours and offending content/users may be removed."
+  });
+});
+
 app.get("/api/messages", requireAuth, async (_req, res) => {
   try {
     const { messages, store } = await listForumMessages();
@@ -429,6 +623,13 @@ app.post("/api/messages", requireAuth, async (req, res) => {
 
   if (text.length > 500) {
     return res.status(400).json({ error: "Message is too long." });
+  }
+
+  if (containsBlockedTerm(text)) {
+    return res.status(400).json({
+      error:
+        "This post appears to contain objectionable content and was blocked by moderation."
+    });
   }
 
   const { db, user } = getCurrentUser(req);
@@ -450,6 +651,72 @@ app.post("/api/messages", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("Failed to save forum message:", error);
     res.status(500).json({ error: "Could not save forum message." });
+  }
+});
+
+app.delete("/api/messages/:id", requireAuth, async (req, res) => {
+  const { db, user } = getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({ error: "You must be logged in." });
+  }
+
+  const message = await findForumMessage(req.params.id);
+  if (!message) {
+    return res.json({ ok: true });
+  }
+
+  if (message.userEmail !== user.email) {
+    return res.status(403).json({ error: "You can only delete your own posts." });
+  }
+
+  try {
+    const store = await removeForumMessage(req.params.id, db);
+    res.json({ ok: true, store });
+  } catch (error) {
+    console.error("Failed to delete forum message:", error);
+    res.status(500).json({ error: "Could not delete post." });
+  }
+});
+
+app.post("/api/messages/:id/report", requireAuth, async (req, res) => {
+  const reason = String(req.body.reason || "Objectionable content").trim();
+  const { db, user } = getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({ error: "You must be logged in." });
+  }
+
+  try {
+    const result = await reportForumMessage(req.params.id, user, reason, db);
+    if (!result) {
+      return res.status(404).json({ error: "Post was not found." });
+    }
+
+    res.status(201).json({
+      ok: true,
+      store: result.store,
+      message:
+        "Report received. Sentenal reviews objectionable content reports within 24 hours."
+    });
+  } catch (error) {
+    console.error("Failed to report forum message:", error);
+    res.status(500).json({ error: "Could not submit report." });
+  }
+});
+
+app.delete("/api/account", requireAuth, async (req, res) => {
+  const { db, user } = getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({ error: "You must be logged in." });
+  }
+
+  try {
+    const result = await deleteAccountData(user, db);
+    req.session.destroy(() => {
+      res.json({ ok: true, ...result });
+    });
+  } catch (error) {
+    console.error("Failed to delete account:", error);
+    res.status(500).json({ error: "Could not delete account." });
   }
 });
 

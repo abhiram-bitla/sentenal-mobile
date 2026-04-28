@@ -2,6 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -41,6 +42,9 @@ const STARTER_MESSAGES = [
     createdAt: "2026-04-22T12:02:00.000Z"
   }
 ];
+const TERMS_TEXT =
+  "I agree to Sentenal's terms: there is no tolerance for objectionable content or abusive users. Reports are reviewed within 24 hours and offending content/users may be removed.";
+const MODERATION_EMAIL = "abhiram.bitla@gmail.com";
 
 export default function App() {
   const [email, setEmail] = useState("");
@@ -51,9 +55,17 @@ export default function App() {
   const [savedAlias, setSavedAlias] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [blockedUsers, setBlockedUsers] = useState([]);
+  const [hiddenMessageIds, setHiddenMessageIds] = useState([]);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [newsletterSynced, setNewsletterSynced] = useState(false);
   const [newsletterSyncing, setNewsletterSyncing] = useState(false);
-  const displayMessages = messages.length ? messages : STARTER_MESSAGES;
+  const visibleMessages = messages
+    .filter((item) => !hiddenMessageIds.includes(item.id))
+    .filter((item) => !blockedUsers.includes(item.userEmail));
+  const displayMessages = visibleMessages.length ? visibleMessages : STARTER_MESSAGES;
 
   useEffect(() => {
     if (!savedEmail) {
@@ -222,6 +234,11 @@ export default function App() {
   }
 
   async function handleEmailSubmit() {
+    if (!acceptedTerms) {
+      setStatusMessage("Please agree to the Sentenal safety terms before joining.");
+      return;
+    }
+
     setLoading(true);
     const nextAlias = buildAnonymousName(alias);
     const nextEmail = buildStorageEmail(email);
@@ -232,6 +249,7 @@ export default function App() {
     setSavedEmail(nextEmail);
     setEmail("");
     setAlias("");
+    setStatusMessage("");
     setScreen("chat");
     setLoading(false);
   }
@@ -260,8 +278,87 @@ export default function App() {
         body: { text: optimisticMessage.text }
       });
       loadMessages(savedEmail, savedAlias);
-    } catch (_error) {
-      // Keep the local chat flow uninterrupted even if the post fails.
+      setStatusMessage("");
+    } catch (error) {
+      setMessages((current) =>
+        current.filter((item) => item.id !== optimisticMessage.id)
+      );
+      setStatusMessage(error.message);
+    }
+  }
+
+  async function reportMessage(item) {
+    setHiddenMessageIds((current) => [...new Set([...current, item.id])]);
+    setStatusMessage("Report submitted. We review reports within 24 hours.");
+
+    try {
+      await request(`/api/messages/${item.id}/report`, {
+        method: "POST",
+        email: savedEmail,
+        alias: savedAlias,
+        body: { reason: "Reported from in-app forum controls" }
+      });
+      loadMessages(savedEmail, savedAlias);
+    } catch (error) {
+      setStatusMessage(error.message);
+    }
+  }
+
+  function blockUser(item) {
+    setBlockedUsers((current) => [...new Set([...current, item.userEmail])]);
+    setStatusMessage(`${item.userAlias || item.userEmail} is blocked from your feed.`);
+  }
+
+  async function removeMessageFromFeed(item) {
+    setHiddenMessageIds((current) => [...new Set([...current, item.id])]);
+    setStatusMessage("Post removed from your feed.");
+
+    if (item.userEmail !== savedEmail) {
+      return;
+    }
+
+    try {
+      await request(`/api/messages/${item.id}`, {
+        method: "DELETE",
+        email: savedEmail,
+        alias: savedAlias
+      });
+      loadMessages(savedEmail, savedAlias);
+    } catch (error) {
+      setStatusMessage(error.message);
+    }
+  }
+
+  function confirmDeleteAccount() {
+    Alert.alert(
+      "Delete account?",
+      "This removes your Sentenal account data and posts. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: deleteAccount
+        }
+      ]
+    );
+  }
+
+  async function deleteAccount() {
+    setDeletingAccount(true);
+    try {
+      await request("/api/account", {
+        method: "DELETE",
+        email: savedEmail,
+        alias: savedAlias
+      });
+      resetEmail();
+      setAcceptedTerms(false);
+      setStatusMessage("Your account deletion request is complete.");
+    } catch (error) {
+      setStatusMessage(error.message);
+    } finally {
+      setDeletingAccount(false);
     }
   }
 
@@ -273,6 +370,8 @@ export default function App() {
     setNewsletterSyncing(false);
     setMessages([]);
     setMessage("");
+    setBlockedUsers([]);
+    setHiddenMessageIds([]);
   }
 
   if (screen !== "chat") {
@@ -326,10 +425,25 @@ export default function App() {
                 <Text style={styles.primaryButtonText}>Join newsletter and chat</Text>
               )}
             </Pressable>
+            <Pressable
+              style={styles.termsRow}
+              onPress={() => setAcceptedTerms((current) => !current)}
+            >
+              <View style={[styles.checkbox, acceptedTerms && styles.checkboxActive]}>
+                <Text style={styles.checkboxText}>{acceptedTerms ? "OK" : ""}</Text>
+              </View>
+              <Text style={styles.termsText}>{TERMS_TEXT}</Text>
+            </Pressable>
             <Text style={styles.helperText}>
               Your anonymous name is what everyone sees. The app keeps moving and
               opens chat right away.
             </Text>
+            <Text style={styles.helperText}>
+              Report abuse: {MODERATION_EMAIL}
+            </Text>
+            {statusMessage ? (
+              <Text style={styles.statusText}>{statusMessage}</Text>
+            ) : null}
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -354,6 +468,25 @@ export default function App() {
           </Pressable>
         </View>
 
+        <View style={styles.safetyCard}>
+          <Text style={styles.safetyTitle}>Safety controls</Text>
+          <Text style={styles.safetyText}>
+            Zero tolerance for abusive or objectionable content. Reported posts are
+            removed from the feed and reviewed within 24 hours. Contact:
+            {" "}{MODERATION_EMAIL}
+          </Text>
+          <Pressable
+            onPress={confirmDeleteAccount}
+            style={[styles.dangerButton, deletingAccount && styles.disabledButton]}
+            disabled={deletingAccount}
+          >
+            <Text style={styles.dangerButtonText}>
+              {deletingAccount ? "Deleting account..." : "Delete account"}
+            </Text>
+          </Pressable>
+          {statusMessage ? <Text style={styles.statusText}>{statusMessage}</Text> : null}
+        </View>
+
         <FlatList
           data={displayMessages}
           keyExtractor={(item) => item.id}
@@ -365,6 +498,27 @@ export default function App() {
               <Text style={styles.messageMeta}>
                 {new Date(item.createdAt).toLocaleString()}
               </Text>
+              {!item.id.startsWith("starter-") ? (
+                <View style={styles.messageActions}>
+                  <Pressable
+                    style={styles.actionButton}
+                    onPress={() => reportMessage(item)}
+                  >
+                    <Text style={styles.actionButtonText}>Report</Text>
+                  </Pressable>
+                  <Pressable style={styles.actionButton} onPress={() => blockUser(item)}>
+                    <Text style={styles.actionButtonText}>Block user</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.actionButton}
+                    onPress={() => removeMessageFromFeed(item)}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {item.userEmail === savedEmail ? "Delete post" : "Remove"}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           )}
         />
@@ -482,6 +636,36 @@ const styles = StyleSheet.create({
     color: "#fff4d8",
     fontWeight: "700"
   },
+  termsRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingVertical: 6
+  },
+  checkbox: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#a53600",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff9ef"
+  },
+  checkboxActive: {
+    backgroundColor: "#ffca08"
+  },
+  checkboxText: {
+    color: "#6a1200",
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  termsText: {
+    flex: 1,
+    color: "#6d3100",
+    fontSize: 13,
+    lineHeight: 18
+  },
   statusText: {
     color: "#7b5d48",
     fontSize: 14
@@ -505,6 +689,42 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: "800",
     color: "#fff5dd"
+  },
+  safetyCard: {
+    backgroundColor: "#fff1d6",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#ffcf5a",
+    padding: 14,
+    gap: 8,
+    marginBottom: 12
+  },
+  safetyTitle: {
+    color: "#a53600",
+    fontSize: 15,
+    fontWeight: "900"
+  },
+  safetyText: {
+    color: "#5f2a00",
+    fontSize: 13,
+    lineHeight: 18
+  },
+  dangerButton: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#b31900",
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    backgroundColor: "#ffe1d6"
+  },
+  dangerButtonText: {
+    color: "#8d1800",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  disabledButton: {
+    opacity: 0.55
   },
   messageList: {
     gap: 12,
@@ -532,6 +752,25 @@ const styles = StyleSheet.create({
   messageMeta: {
     fontSize: 12,
     color: "#9a6d3b"
+  },
+  messageActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8
+  },
+  actionButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#c95d15",
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    backgroundColor: "#fff9ef"
+  },
+  actionButtonText: {
+    color: "#9f3a00",
+    fontSize: 12,
+    fontWeight: "800"
   },
   composer: {
     gap: 10,
