@@ -14,8 +14,8 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "4",
-      "bundleIdentifier": "com.abhirambitla.sentenalios",
+      "buildNumber": "5",
+      "bundleIdentifier": "com.abhirambitla.sentenalmobile",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
