@@ -45,14 +45,6 @@ const STARTER_MESSAGES = [
 const TERMS_TEXT =
   "I agree to the Sentenal EULA and forum rules. Sentenal is an 18+ public forum with no tolerance for objectionable content or abusive users.";
 const MODERATION_EMAIL = "abhiram.bitla@gmail.com";
-const SAFETY_RULES = [
-  "You must be 18 or older to use this public forum.",
-  "Do not post harassment, threats, hate, sexual exploitation, illegal content, spam, or abusive content.",
-  "Posts are filtered for objectionable terms before they appear.",
-  "Users can report posts, block users, and immediately remove posts from their own feed.",
-  "Reported posts are removed from the feed, reviewed within 24 hours, and abusive users may be ejected.",
-  `Report inappropriate activity in the app or by email: ${MODERATION_EMAIL}`
-];
 
 export default function App() {
   const [email, setEmail] = useState("");
@@ -447,21 +439,18 @@ export default function App() {
               </View>
               <Text style={styles.eyebrow}>Sentenal Live</Text>
             </View>
-            <Text style={styles.title}>Sign up for the newsletter. Then jump into chat.</Text>
+            <Text style={styles.title}>Join Sentenal.</Text>
             <Text style={styles.subtitle}>
-              Sentenal is an 18+ public forum. Pick any email, choose an
-              anonymous name, and review the safety rules before entering.
+              18+ public forum with report, block, remove, and account deletion controls.
             </Text>
           </View>
 
           <View style={styles.card}>
             <View style={styles.rulesCard}>
-              <Text style={styles.rulesTitle}>18+ Forum EULA and Safety Rules</Text>
-              {SAFETY_RULES.map((rule) => (
-                <Text key={rule} style={styles.rulesText}>
-                  - {rule}
-                </Text>
-              ))}
+              <Text style={styles.rulesTitle}>18+ Safety Rules</Text>
+              <Text style={styles.rulesText}>
+                No objectionable content or abusive users. Reports are reviewed within 24 hours.
+              </Text>
             </View>
             <TextInput
               autoCapitalize="none"
