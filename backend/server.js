@@ -163,6 +163,30 @@ async function seedLocalDefaultMessages() {
   }
 }
 
+function saveLocalMessage(message, db) {
+  const index = db.messages.findIndex((entry) => entry.id === message.id);
+
+  if (index >= 0) {
+    db.messages[index] = { ...db.messages[index], ...message };
+  } else {
+    db.messages.push(message);
+  }
+
+  writeDb(db);
+}
+
+function removeLocalMessage(messageId, db) {
+  db.messages = db.messages.filter((message) => message.id !== messageId);
+  writeDb(db);
+}
+
+function removeLocalMessagesByUser(userEmail, db) {
+  const beforeMessages = db.messages.length;
+  db.messages = db.messages.filter((message) => message.userEmail !== userEmail);
+  writeDb(db);
+  return beforeMessages - db.messages.length;
+}
+
 async function seedDynamoDefaultMessages(client) {
   await Promise.all(
     DEFAULT_MESSAGES.map((message) =>
@@ -184,133 +208,166 @@ async function seedDynamoDefaultMessages(client) {
 }
 
 async function ensureDefaultMessages() {
+  await seedLocalDefaultMessages();
+
   const client = getDynamoDocClient();
   if (client) {
-    await seedDynamoDefaultMessages(client);
-    return "dynamodb";
+    try {
+      await seedDynamoDefaultMessages(client);
+      return "local-json+dynamodb";
+    } catch (error) {
+      console.warn("Could not seed DynamoDB default messages:", error.message);
+    }
   }
 
-  await seedLocalDefaultMessages();
   return "local-json";
 }
 
 async function listForumMessages() {
   const store = await ensureDefaultMessages();
   const client = getDynamoDocClient();
+  const db = readDb();
 
   if (client) {
-    const result = await client.send(
-      new ScanCommand({
-        TableName: MESSAGES_TABLE,
-        Limit: 1000
-      })
-    );
+    try {
+      const result = await client.send(
+        new ScanCommand({
+          TableName: MESSAGES_TABLE,
+          Limit: 1000
+        })
+      );
+      const messagesById = new Map();
 
-    return {
-      store,
-      messages: sortMessages(result.Items || [])
-    };
+      [...db.messages, ...(result.Items || [])].forEach((message) => {
+        messagesById.set(message.id, message);
+      });
+
+      return {
+        store,
+        messages: sortMessages([...messagesById.values()])
+      };
+    } catch (error) {
+      console.warn("Could not load DynamoDB messages:", error.message);
+    }
   }
 
-  const db = readDb();
   return {
-    store,
+    store: "local-json",
     messages: sortMessages(db.messages)
   };
 }
 
 async function findForumMessage(messageId) {
+  const db = readDb();
+  const localMessage = db.messages.find((message) => message.id === messageId);
+  if (localMessage) {
+    return localMessage;
+  }
+
   const client = getDynamoDocClient();
 
   if (client) {
-    const result = await client.send(
-      new ScanCommand({
-        TableName: MESSAGES_TABLE,
-        FilterExpression: "id = :id",
-        ExpressionAttributeValues: {
-          ":id": messageId
-        },
-        Limit: 1
-      })
-    );
+    try {
+      const result = await client.send(
+        new ScanCommand({
+          TableName: MESSAGES_TABLE,
+          FilterExpression: "id = :id",
+          ExpressionAttributeValues: {
+            ":id": messageId
+          },
+          Limit: 1
+        })
+      );
 
-    return (result.Items || [])[0] || null;
+      return (result.Items || [])[0] || null;
+    } catch (error) {
+      console.warn("Could not find DynamoDB message:", error.message);
+    }
   }
 
-  const db = readDb();
-  return db.messages.find((message) => message.id === messageId) || null;
+  return null;
 }
 
 async function saveForumMessage(message, db) {
+  saveLocalMessage(message, db);
+
   const client = getDynamoDocClient();
 
   if (client) {
-    await client.send(
-      new PutCommand({
-        TableName: MESSAGES_TABLE,
-        Item: message
-      })
-    );
-    return "dynamodb";
+    try {
+      await client.send(
+        new PutCommand({
+          TableName: MESSAGES_TABLE,
+          Item: message
+        })
+      );
+      return "local-json+dynamodb";
+    } catch (error) {
+      console.warn("Could not save DynamoDB message:", error.message);
+    }
   }
 
-  db.messages.push(message);
-  writeDb(db);
   return "local-json";
 }
 
 async function removeForumMessage(messageId, db) {
+  removeLocalMessage(messageId, db);
+
   const client = getDynamoDocClient();
 
   if (client) {
-    await client.send(
-      new DeleteCommand({
-        TableName: MESSAGES_TABLE,
-        Key: { id: messageId }
-      })
-    );
-    return "dynamodb";
+    try {
+      await client.send(
+        new DeleteCommand({
+          TableName: MESSAGES_TABLE,
+          Key: { id: messageId }
+        })
+      );
+      return "local-json+dynamodb";
+    } catch (error) {
+      console.warn("Could not remove DynamoDB message:", error.message);
+    }
   }
 
-  db.messages = db.messages.filter((message) => message.id !== messageId);
-  writeDb(db);
   return "local-json";
 }
 
 async function removeForumMessagesByUser(userEmail, db) {
+  const removedLocalMessages = removeLocalMessagesByUser(userEmail, db);
   const client = getDynamoDocClient();
 
   if (client) {
-    const result = await client.send(
-      new ScanCommand({
-        TableName: MESSAGES_TABLE,
-        FilterExpression: "userEmail = :email",
-        ExpressionAttributeValues: {
-          ":email": userEmail
-        }
-      })
-    );
+    try {
+      const result = await client.send(
+        new ScanCommand({
+          TableName: MESSAGES_TABLE,
+          FilterExpression: "userEmail = :email",
+          ExpressionAttributeValues: {
+            ":email": userEmail
+          }
+        })
+      );
 
-    await Promise.all(
-      (result.Items || [])
-        .filter((item) => item.type !== "report" && item.type !== "ban")
-        .map((item) =>
-          client.send(
-            new DeleteCommand({
-              TableName: MESSAGES_TABLE,
-              Key: { id: item.id }
-            })
+      await Promise.all(
+        (result.Items || [])
+          .filter((item) => item.type !== "report" && item.type !== "ban")
+          .map((item) =>
+            client.send(
+              new DeleteCommand({
+                TableName: MESSAGES_TABLE,
+                Key: { id: item.id }
+              })
+            )
           )
-        )
-    );
+      );
 
-    return (result.Items || []).length;
+      return Math.max(removedLocalMessages, (result.Items || []).length);
+    } catch (error) {
+      console.warn("Could not remove DynamoDB messages by user:", error.message);
+    }
   }
 
-  const beforeMessages = db.messages.length;
-  db.messages = db.messages.filter((message) => message.userEmail !== userEmail);
-  writeDb(db);
-  return beforeMessages - db.messages.length;
+  return removedLocalMessages;
 }
 
 async function banForumUser(userEmail, reason, db) {
@@ -321,49 +378,62 @@ async function banForumUser(userEmail, reason, db) {
     reason,
     createdAt: new Date().toISOString()
   };
-  const client = getDynamoDocClient();
-
-  if (client) {
-    await client.send(
-      new PutCommand({
-        TableName: MESSAGES_TABLE,
-        Item: ban
-      })
-    );
-    return "dynamodb";
-  }
-
   db.bannedUsers = db.bannedUsers || [];
   if (!db.bannedUsers.some((entry) => entry.userEmail === userEmail)) {
     db.bannedUsers.push(ban);
+    writeDb(db);
   }
-  writeDb(db);
+
+  const client = getDynamoDocClient();
+
+  if (client) {
+    try {
+      await client.send(
+        new PutCommand({
+          TableName: MESSAGES_TABLE,
+          Item: ban
+        })
+      );
+      return "local-json+dynamodb";
+    } catch (error) {
+      console.warn("Could not save DynamoDB ban:", error.message);
+    }
+  }
+
   return "local-json";
 }
 
 async function isForumUserBanned(userEmail, db) {
+  if ((db.bannedUsers || []).some((entry) => entry.userEmail === userEmail)) {
+    return true;
+  }
+
   const client = getDynamoDocClient();
 
   if (client) {
-    const result = await client.send(
-      new ScanCommand({
-        TableName: MESSAGES_TABLE,
-        FilterExpression: "#type = :type AND userEmail = :email",
-        ExpressionAttributeNames: {
-          "#type": "type"
-        },
-        ExpressionAttributeValues: {
-          ":type": "ban",
-          ":email": userEmail
-        },
-        Limit: 1
-      })
-    );
+    try {
+      const result = await client.send(
+        new ScanCommand({
+          TableName: MESSAGES_TABLE,
+          FilterExpression: "#type = :type AND userEmail = :email",
+          ExpressionAttributeNames: {
+            "#type": "type"
+          },
+          ExpressionAttributeValues: {
+            ":type": "ban",
+            ":email": userEmail
+          },
+          Limit: 1
+        })
+      );
 
-    return Boolean((result.Items || []).length);
+      return Boolean((result.Items || []).length);
+    } catch (error) {
+      console.warn("Could not check DynamoDB ban:", error.message);
+    }
   }
 
-  return (db.bannedUsers || []).some((entry) => entry.userEmail === userEmail);
+  return false;
 }
 
 async function reportForumMessage(messageId, reporter, reason, db) {
@@ -387,26 +457,32 @@ async function reportForumMessage(messageId, reporter, reason, db) {
   };
   const shouldEjectUser =
     !message.seeded && !String(message.userEmail || "").endsWith("@sentenal.news");
+  db.reports = db.reports || [];
+  db.reports.push(report);
+  writeDb(db);
 
   const client = getDynamoDocClient();
   if (client) {
-    await client.send(
-      new PutCommand({
-        TableName: MESSAGES_TABLE,
-        Item: report
-      })
-    );
+    try {
+      await client.send(
+        new PutCommand({
+          TableName: MESSAGES_TABLE,
+          Item: report
+        })
+      );
+    } catch (error) {
+      console.warn("Could not save DynamoDB report:", error.message);
+    }
+
     if (shouldEjectUser) {
       await banForumUser(message.userEmail, "Reported objectionable content", db);
       await removeForumMessagesByUser(message.userEmail, db);
     } else {
       await removeForumMessage(messageId, db);
     }
-    return { report, store: "dynamodb", ejectedUser: shouldEjectUser };
+    return { report, store: "local-json+dynamodb", ejectedUser: shouldEjectUser };
   }
 
-  db.reports = db.reports || [];
-  db.reports.push(report);
   if (shouldEjectUser) {
     await banForumUser(message.userEmail, "Reported objectionable content", db);
     await removeForumMessagesByUser(message.userEmail, db);
