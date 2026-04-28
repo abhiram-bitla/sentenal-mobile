@@ -73,7 +73,10 @@ export default function App() {
   const visibleMessages = messages
     .filter((item) => !hiddenMessageIds.includes(item.id))
     .filter((item) => !blockedUsers.includes(item.userEmail));
-  const displayMessages = visibleMessages.length ? visibleMessages : STARTER_MESSAGES;
+  const visibleStarterMessages = STARTER_MESSAGES
+    .filter((item) => !hiddenMessageIds.includes(item.id))
+    .filter((item) => !blockedUsers.includes(item.userEmail));
+  const displayMessages = messages.length ? visibleMessages : visibleStarterMessages;
 
   useEffect(() => {
     if (!savedEmail) {
