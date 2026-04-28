@@ -43,8 +43,16 @@ const STARTER_MESSAGES = [
   }
 ];
 const TERMS_TEXT =
-  "I agree to Sentenal's terms: there is no tolerance for objectionable content or abusive users. Reports are reviewed within 24 hours and offending content/users may be removed.";
+  "I agree to the Sentenal EULA and forum rules. Sentenal is an 18+ public forum with no tolerance for objectionable content or abusive users.";
 const MODERATION_EMAIL = "abhiram.bitla@gmail.com";
+const SAFETY_RULES = [
+  "You must be 18 or older to use this public forum.",
+  "Do not post harassment, threats, hate, sexual exploitation, illegal content, spam, or abusive content.",
+  "Posts are filtered for objectionable terms before they appear.",
+  "Users can report posts, block users, and immediately remove posts from their own feed.",
+  "Reported posts are removed from the feed, reviewed within 24 hours, and abusive users may be ejected.",
+  `Report inappropriate activity in the app or by email: ${MODERATION_EMAIL}`
+];
 
 export default function App() {
   const [email, setEmail] = useState("");
@@ -55,6 +63,7 @@ export default function App() {
   const [savedAlias, setSavedAlias] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [confirmedAdult, setConfirmedAdult] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [blockedUsers, setBlockedUsers] = useState([]);
@@ -234,8 +243,13 @@ export default function App() {
   }
 
   async function handleEmailSubmit() {
+    if (!confirmedAdult) {
+      setStatusMessage("Please confirm you are 18 or older before joining.");
+      return;
+    }
+
     if (!acceptedTerms) {
-      setStatusMessage("Please agree to the Sentenal safety terms before joining.");
+      setStatusMessage("Please agree to the Sentenal EULA and safety terms before joining.");
       return;
     }
 
@@ -289,7 +303,13 @@ export default function App() {
 
   async function reportMessage(item) {
     setHiddenMessageIds((current) => [...new Set([...current, item.id])]);
-    setStatusMessage("Report submitted. We review reports within 24 hours.");
+    setStatusMessage(
+      "Report submitted. The post was removed from your feed and will be reviewed within 24 hours."
+    );
+
+    if (item.id.startsWith("starter-")) {
+      return;
+    }
 
     try {
       await request(`/api/messages/${item.id}/report`, {
@@ -306,7 +326,7 @@ export default function App() {
 
   function blockUser(item) {
     setBlockedUsers((current) => [...new Set([...current, item.userEmail])]);
-    setStatusMessage(`${item.userAlias || item.userEmail} is blocked from your feed.`);
+    setStatusMessage(`${item.userAlias || item.userEmail} is blocked and hidden from your feed.`);
   }
 
   async function removeMessageFromFeed(item) {
@@ -353,8 +373,9 @@ export default function App() {
         alias: savedAlias
       });
       resetEmail();
+      setConfirmedAdult(false);
       setAcceptedTerms(false);
-      setStatusMessage("Your account deletion request is complete.");
+      setStatusMessage("Your account and posts have been deleted.");
     } catch (error) {
       setStatusMessage(error.message);
     } finally {
@@ -395,12 +416,20 @@ export default function App() {
             </View>
             <Text style={styles.title}>Sign up for the newsletter. Then jump into chat.</Text>
             <Text style={styles.subtitle}>
-              Pick any email, choose an anonymous name, and we will drop you
-              straight into the public room.
+              Sentenal is an 18+ public forum. Pick any email, choose an
+              anonymous name, and review the safety rules before entering.
             </Text>
           </View>
 
           <View style={styles.card}>
+            <View style={styles.rulesCard}>
+              <Text style={styles.rulesTitle}>18+ Forum EULA and Safety Rules</Text>
+              {SAFETY_RULES.map((rule) => (
+                <Text key={rule} style={styles.rulesText}>
+                  - {rule}
+                </Text>
+              ))}
+            </View>
             <TextInput
               autoCapitalize="none"
               keyboardType="email-address"
@@ -418,12 +447,14 @@ export default function App() {
               value={alias}
               onChangeText={setAlias}
             />
-            <Pressable style={styles.primaryButton} onPress={handleEmailSubmit}>
-              {loading ? (
-                <ActivityIndicator color="#fff8f0" />
-              ) : (
-                <Text style={styles.primaryButtonText}>Join newsletter and chat</Text>
-              )}
+            <Pressable
+              style={styles.termsRow}
+              onPress={() => setConfirmedAdult((current) => !current)}
+            >
+              <View style={[styles.checkbox, confirmedAdult && styles.checkboxActive]}>
+                <Text style={styles.checkboxText}>{confirmedAdult ? "OK" : ""}</Text>
+              </View>
+              <Text style={styles.termsText}>I confirm I am 18 or older.</Text>
             </Pressable>
             <Pressable
               style={styles.termsRow}
@@ -433,6 +464,13 @@ export default function App() {
                 <Text style={styles.checkboxText}>{acceptedTerms ? "OK" : ""}</Text>
               </View>
               <Text style={styles.termsText}>{TERMS_TEXT}</Text>
+            </Pressable>
+            <Pressable style={styles.primaryButton} onPress={handleEmailSubmit}>
+              {loading ? (
+                <ActivityIndicator color="#fff8f0" />
+              ) : (
+                <Text style={styles.primaryButtonText}>Join newsletter and chat</Text>
+              )}
             </Pressable>
             <Text style={styles.helperText}>
               Your anonymous name is what everyone sees. The app keeps moving and
@@ -469,11 +507,12 @@ export default function App() {
         </View>
 
         <View style={styles.safetyCard}>
-          <Text style={styles.safetyTitle}>Safety controls</Text>
+          <Text style={styles.safetyTitle}>18+ Safety controls</Text>
           <Text style={styles.safetyText}>
-            Zero tolerance for abusive or objectionable content. Reported posts are
-            removed from the feed and reviewed within 24 hours. Contact:
-            {" "}{MODERATION_EMAIL}
+            Zero tolerance for abusive or objectionable content. Use Report to
+            flag a post, Block user to hide a user, and Remove to immediately
+            take a post out of your feed. Reported posts are reviewed within 24
+            hours and abusive users may be ejected. Contact: {MODERATION_EMAIL}
           </Text>
           <Pressable
             onPress={confirmDeleteAccount}
@@ -498,27 +537,25 @@ export default function App() {
               <Text style={styles.messageMeta}>
                 {new Date(item.createdAt).toLocaleString()}
               </Text>
-              {!item.id.startsWith("starter-") ? (
-                <View style={styles.messageActions}>
-                  <Pressable
-                    style={styles.actionButton}
-                    onPress={() => reportMessage(item)}
-                  >
-                    <Text style={styles.actionButtonText}>Report</Text>
-                  </Pressable>
-                  <Pressable style={styles.actionButton} onPress={() => blockUser(item)}>
-                    <Text style={styles.actionButtonText}>Block user</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.actionButton}
-                    onPress={() => removeMessageFromFeed(item)}
-                  >
-                    <Text style={styles.actionButtonText}>
-                      {item.userEmail === savedEmail ? "Delete post" : "Remove"}
-                    </Text>
-                  </Pressable>
-                </View>
-              ) : null}
+              <View style={styles.messageActions}>
+                <Pressable
+                  style={styles.actionButton}
+                  onPress={() => reportMessage(item)}
+                >
+                  <Text style={styles.actionButtonText}>Report</Text>
+                </Pressable>
+                <Pressable style={styles.actionButton} onPress={() => blockUser(item)}>
+                  <Text style={styles.actionButtonText}>Block user</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.actionButton}
+                  onPress={() => removeMessageFromFeed(item)}
+                >
+                  <Text style={styles.actionButtonText}>
+                    {item.userEmail === savedEmail ? "Delete post" : "Remove"}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
           )}
         />
@@ -635,6 +672,25 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: "#fff4d8",
     fontWeight: "700"
+  },
+  rulesCard: {
+    backgroundColor: "#fff9ef",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#ffcf5a",
+    padding: 14,
+    gap: 6
+  },
+  rulesTitle: {
+    color: "#a53600",
+    fontSize: 14,
+    fontWeight: "900",
+    marginBottom: 2
+  },
+  rulesText: {
+    color: "#5f2a00",
+    fontSize: 12,
+    lineHeight: 17
   },
   termsRow: {
     flexDirection: "row",

@@ -33,11 +33,17 @@ const MODERATION_CONTACT_EMAIL =
 const BLOCKED_TERMS = [
   "kill yourself",
   "kys",
+  "suicide bait",
   "nazi",
   "terrorist",
   "rape",
   "slur",
-  "hate speech"
+  "hate speech",
+  "harass",
+  "dox",
+  "doxx",
+  "explicit minor",
+  "child sexual"
 ];
 
 const DEFAULT_MESSAGES = [
@@ -136,6 +142,7 @@ function normalizeMessage(message) {
 function sortMessages(messages) {
   return messages
     .filter((message) => message.type !== "report")
+    .filter((message) => message.type !== "ban")
     .filter((message) => !message.removedAt)
     .filter((message) => !message.reportedAt)
     .map(normalizeMessage)
@@ -270,6 +277,95 @@ async function removeForumMessage(messageId, db) {
   return "local-json";
 }
 
+async function removeForumMessagesByUser(userEmail, db) {
+  const client = getDynamoDocClient();
+
+  if (client) {
+    const result = await client.send(
+      new ScanCommand({
+        TableName: MESSAGES_TABLE,
+        FilterExpression: "userEmail = :email",
+        ExpressionAttributeValues: {
+          ":email": userEmail
+        }
+      })
+    );
+
+    await Promise.all(
+      (result.Items || [])
+        .filter((item) => item.type !== "report" && item.type !== "ban")
+        .map((item) =>
+          client.send(
+            new DeleteCommand({
+              TableName: MESSAGES_TABLE,
+              Key: { id: item.id }
+            })
+          )
+        )
+    );
+
+    return (result.Items || []).length;
+  }
+
+  const beforeMessages = db.messages.length;
+  db.messages = db.messages.filter((message) => message.userEmail !== userEmail);
+  writeDb(db);
+  return beforeMessages - db.messages.length;
+}
+
+async function banForumUser(userEmail, reason, db) {
+  const ban = {
+    id: `ban-${userEmail}`,
+    type: "ban",
+    userEmail,
+    reason,
+    createdAt: new Date().toISOString()
+  };
+  const client = getDynamoDocClient();
+
+  if (client) {
+    await client.send(
+      new PutCommand({
+        TableName: MESSAGES_TABLE,
+        Item: ban
+      })
+    );
+    return "dynamodb";
+  }
+
+  db.bannedUsers = db.bannedUsers || [];
+  if (!db.bannedUsers.some((entry) => entry.userEmail === userEmail)) {
+    db.bannedUsers.push(ban);
+  }
+  writeDb(db);
+  return "local-json";
+}
+
+async function isForumUserBanned(userEmail, db) {
+  const client = getDynamoDocClient();
+
+  if (client) {
+    const result = await client.send(
+      new ScanCommand({
+        TableName: MESSAGES_TABLE,
+        FilterExpression: "#type = :type AND userEmail = :email",
+        ExpressionAttributeNames: {
+          "#type": "type"
+        },
+        ExpressionAttributeValues: {
+          ":type": "ban",
+          ":email": userEmail
+        },
+        Limit: 1
+      })
+    );
+
+    return Boolean((result.Items || []).length);
+  }
+
+  return (db.bannedUsers || []).some((entry) => entry.userEmail === userEmail);
+}
+
 async function reportForumMessage(messageId, reporter, reason, db) {
   const message = await findForumMessage(messageId);
   if (!message) {
@@ -289,6 +385,8 @@ async function reportForumMessage(messageId, reporter, reason, db) {
     status: "pending-review",
     createdAt: new Date().toISOString()
   };
+  const shouldEjectUser =
+    !message.seeded && !String(message.userEmail || "").endsWith("@sentenal.news");
 
   const client = getDynamoDocClient();
   if (client) {
@@ -298,15 +396,25 @@ async function reportForumMessage(messageId, reporter, reason, db) {
         Item: report
       })
     );
-    await removeForumMessage(messageId, db);
-    return { report, store: "dynamodb" };
+    if (shouldEjectUser) {
+      await banForumUser(message.userEmail, "Reported objectionable content", db);
+      await removeForumMessagesByUser(message.userEmail, db);
+    } else {
+      await removeForumMessage(messageId, db);
+    }
+    return { report, store: "dynamodb", ejectedUser: shouldEjectUser };
   }
 
   db.reports = db.reports || [];
   db.reports.push(report);
-  db.messages = db.messages.filter((entry) => entry.id !== messageId);
-  writeDb(db);
-  return { report, store: "local-json" };
+  if (shouldEjectUser) {
+    await banForumUser(message.userEmail, "Reported objectionable content", db);
+    await removeForumMessagesByUser(message.userEmail, db);
+  } else {
+    db.messages = db.messages.filter((entry) => entry.id !== messageId);
+    writeDb(db);
+  }
+  return { report, store: "local-json", ejectedUser: shouldEjectUser };
 }
 
 async function deleteCognitoUsersForEmail(email) {
@@ -638,6 +746,18 @@ app.post("/api/messages", requireAuth, async (req, res) => {
     return res.status(401).json({ error: "You must be logged in." });
   }
 
+  try {
+    if (await isForumUserBanned(user.email, db)) {
+      return res.status(403).json({
+        error:
+          "This account has been removed from the forum for abusive or objectionable content."
+      });
+    }
+  } catch (error) {
+    console.error("Failed to check moderation status:", error);
+    return res.status(500).json({ error: "Could not verify moderation status." });
+  }
+
   const message = {
     id: crypto.randomUUID(),
     text,
@@ -695,8 +815,9 @@ app.post("/api/messages/:id/report", requireAuth, async (req, res) => {
     res.status(201).json({
       ok: true,
       store: result.store,
+      ejectedUser: result.ejectedUser,
       message:
-        "Report received. Sentenal reviews objectionable content reports within 24 hours."
+        "Report received. The post was removed from the feed and Sentenal reviews objectionable content reports within 24 hours."
     });
   } catch (error) {
     console.error("Failed to report forum message:", error);
