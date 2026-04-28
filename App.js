@@ -428,6 +428,9 @@ export default function App() {
       setAcceptedTerms(false);
       setStatusMessage("Your account and posts have been deleted.");
     } catch (error) {
+      resetEmail();
+      setConfirmedAdult(false);
+      setAcceptedTerms(false);
       setStatusMessage(
         getFriendlyErrorMessage(
           error,
