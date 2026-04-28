@@ -374,7 +374,8 @@ async function deleteAccountData(user, db) {
   try {
     removedCognitoUsers = await deleteCognitoUsersForEmail(user.email);
   } catch (error) {
-    console.warn("Could not delete Cognito user records:", error.message);
+    error.message = `Could not delete Cognito user records: ${error.message}`;
+    throw error;
   }
 
   return { removedMessages, removedCognitoUsers };
