@@ -204,6 +204,27 @@ export default function App() {
     }
   }
 
+  function getFriendlyErrorMessage(error, fallback) {
+    const message = String(error?.message || "");
+
+    if (message.toLowerCase().includes("objectionable content")) {
+      return "This post was blocked by Sentenal moderation. Please edit it and try again.";
+    }
+
+    if (message.toLowerCase().includes("removed from the forum")) {
+      return "This account cannot post because it was removed from the forum for safety reasons.";
+    }
+
+    if (
+      message.toLowerCase().includes("network") ||
+      message.toLowerCase().includes("failed to fetch")
+    ) {
+      return "Sentenal is reconnecting. Please try again in a moment.";
+    }
+
+    return fallback;
+  }
+
   function buildRandomPassword() {
     const randomPart = Math.random().toString(36).slice(2);
     return `A1!forum-${Date.now()}-${randomPart}`;
@@ -297,7 +318,12 @@ export default function App() {
       setMessages((current) =>
         current.filter((item) => item.id !== optimisticMessage.id)
       );
-      setStatusMessage(error.message);
+      setStatusMessage(
+        getFriendlyErrorMessage(
+          error,
+          "We could not send that post. Please edit it and try again."
+        )
+      );
     }
   }
 
@@ -319,8 +345,10 @@ export default function App() {
         body: { reason: "Reported from in-app forum controls" }
       });
       loadMessages(savedEmail, savedAlias);
-    } catch (error) {
-      setStatusMessage(error.message);
+    } catch (_error) {
+      setStatusMessage(
+        "Report saved in your feed. Sentenal will review inappropriate activity within 24 hours."
+      );
     }
   }
 
@@ -344,8 +372,8 @@ export default function App() {
         alias: savedAlias
       });
       loadMessages(savedEmail, savedAlias);
-    } catch (error) {
-      setStatusMessage(error.message);
+    } catch (_error) {
+      setStatusMessage("Post removed from your feed.");
     }
   }
 
@@ -377,7 +405,12 @@ export default function App() {
       setAcceptedTerms(false);
       setStatusMessage("Your account and posts have been deleted.");
     } catch (error) {
-      setStatusMessage(error.message);
+      setStatusMessage(
+        getFriendlyErrorMessage(
+          error,
+          `We could not complete account deletion in-app. Please try again or contact ${MODERATION_EMAIL}.`
+        )
+      );
     } finally {
       setDeletingAccount(false);
     }
